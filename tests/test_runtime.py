@@ -55,7 +55,7 @@ class ProbeTests(unittest.TestCase):
       <power_readings><power_draw>29.5 W</power_draw><power_limit>250 W</power_limit></power_readings>
       <processes><process_info><pid>1234</pid><type>C</type><process_name>/bin/python</process_name>
       <used_memory>N/A</used_memory></process_info></processes></gpu>
-      <gpu><product_name>New GPU</product_name><minor_number>1</minor_number>
+      <gpu><product_name>New GPU</product_name><uuid>GPU-two</uuid><minor_number>1</minor_number>
       <utilization><gpu_util>N/A</gpu_util></utilization>
       <gpu_power_readings><power_draw>110 W</power_draw><power_limit>300 W</power_limit></gpu_power_readings>
       </gpu></nvidia_smi_log>"""
@@ -66,7 +66,10 @@ class ProbeTests(unittest.TestCase):
             patch.object(
                 remote_probe.subprocess,
                 "run",
-                return_value=subprocess.CompletedProcess([], 0, self.XML, ""),
+                side_effect=[
+                    subprocess.CompletedProcess([], 0, "0, GPU-one\n1, GPU-two\n", ""),
+                    subprocess.CompletedProcess([], 0, self.XML, ""),
+                ],
             ),
             patch.object(remote_probe.os, "stat", side_effect=PermissionError),
         ):
@@ -87,7 +90,10 @@ class ProbeTests(unittest.TestCase):
             patch.object(
                 remote_probe.subprocess,
                 "run",
-                return_value=subprocess.CompletedProcess([], 0, self.XML, ""),
+                side_effect=[
+                    subprocess.CompletedProcess([], 0, "0, GPU-one\n1, GPU-two\n", ""),
+                    subprocess.CompletedProcess([], 0, self.XML, ""),
+                ],
             ),
             patch.object(
                 remote_probe.os, "stat", return_value=SimpleNamespace(st_uid=123)
@@ -131,7 +137,10 @@ class ProbeTests(unittest.TestCase):
             patch.object(
                 remote_probe.subprocess,
                 "run",
-                return_value=subprocess.CompletedProcess([], 0, "broken", ""),
+                side_effect=[
+                    subprocess.CompletedProcess([], 0, "0, GPU-one\n", ""),
+                    subprocess.CompletedProcess([], 0, "broken", ""),
+                ],
             ),
         ):
             self.assertTrue(remote_probe.gpu_data()[1])

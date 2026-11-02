@@ -35,6 +35,20 @@ Node Reporter 的 GPU 数据源是**逐节点显式选择**的可选配置。省
 
 NVIDIA-SMI 配置只接受 `provider`，不接受 DCGM 专属选项。未知字段、错误类型、未知数据源在写入配置前拒绝。公开离线模型为 `contracts/gpu-config.schema.json`；URL、数据源专属字段等跨字段条件还由运行验证器检查。
 
+## NVIDIA-SMI 的 GPU 编号
+
+默认数据源的页面 `GPU N` 直接对应 **Reporter 所在环境中 `nvidia-smi` 的 index**。Reporter 每次显式查询 `--query-gpu=index,uuid --format=csv,noheader,nounits`，按 UUID 与 `nvidia-smi -q -x` 的详细指标 / 进程关联，再按 index 排列；不使用 `/dev/nvidiaN` 的 `minor_number`，也不拿 XML 顺序或数组位置充当编号。编号可以不连续，不补零或重新编号。
+
+两次只读命令共享原有 8 秒超时预算。编号查询失败、重复 / 无效身份，或两次查询的 UUID 集合不一致时，本次 GPU 列表为空并给出警告，系统指标仍正常上报；不退回可能错误的 minor number / 排列序号，也不使用缓存编号。数字 index 并非跨重启的稳定身份，长期关联应使用 UUID。
+
+**CUDA 编号不保证与 NVIDIA-SMI index 相同。** 数字形式的 `CUDA_VISIBLE_DEVICES` 取决于 CUDA 的枚举顺序（包括 `CUDA_DEVICE_ORDER`）；它还会筛选设备并将进程内的 `cuda:0`、`cuda:1` 等重新编号。容器 / 调度器也可能改变可见设备。跨这些环境选择同一张物理 GPU 时，优先使用 GPU UUID，例如 `CUDA_VISIBLE_DEVICES=GPU-…`，并通过下列命令核对：
+
+```bash
+nvidia-smi --query-gpu=index,uuid,pci.bus_id,name --format=csv
+```
+
+DCGM 模式仍使用 exporter 的 `gpu` 标签作为编号、UUID 作为身份；此修正不改变 DCGM 的编号，也不为 `processes: "none"` 增加 NVIDIA-SMI 依赖。
+
 ## DCGM 的前提和边界
 
 此实现通过**已经准备并持续运行的本机 `dcgm-exporter`** 的 Prometheus 文本接口读取 DCGM，而不是解析 `dcgmi` 的终端表格。Reporter 本身仍是 Python 3.6+ 标准库单文件，无须导入 libdcgm / Python 绑定，也无须 Prometheus 服务端。
