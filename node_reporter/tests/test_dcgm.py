@@ -945,19 +945,23 @@ class NvidiaCompatibilityTests(NoCommandsTest):
       <type>C</type><used_memory>N/A</used_memory></process_info></processes>
       </gpu></nvidia_smi_log>"""
 
-    def test_unchanged_nvidia_xml_collector_signature_units_and_process_rows(self):
+    def test_nvidia_xml_collector_keeps_signature_units_and_process_rows(self):
         with (
             patch.object(agent.shutil, "which", return_value="nvidia-smi"),
             patch.object(
                 agent.subprocess,
                 "run",
-                return_value=subprocess.CompletedProcess([], 0, self.XML, ""),
+                side_effect=[
+                    subprocess.CompletedProcess([], 0, "0, GPU-one\n", ""),
+                    subprocess.CompletedProcess([], 0, self.XML, ""),
+                ],
             ) as run,
+            patch.object(agent.time, "monotonic", return_value=100),
             patch.object(agent.os, "stat", side_effect=PermissionError),
         ):
             gpus, warnings = agent.gpu_data()
         self.assertFalse(warnings)
-        self.assertEqual(gpus[0]["index"], 3)
+        self.assertEqual(gpus[0]["index"], 0)
         self.assertEqual(gpus[0]["utilization"], 0)
         self.assertEqual(gpus[0]["memory_used_mb"], 0)
         self.assertEqual(gpus[0]["memory_percent"], 0)
@@ -979,7 +983,10 @@ class NvidiaCompatibilityTests(NoCommandsTest):
             patch.object(
                 agent.subprocess,
                 "run",
-                return_value=subprocess.CompletedProcess([], 0, "not xml", ""),
+                side_effect=[
+                    subprocess.CompletedProcess([], 0, "0, GPU-one\n", ""),
+                    subprocess.CompletedProcess([], 0, "not xml", ""),
+                ],
             ),
         ):
             gpus, warnings = agent.gpu_data()

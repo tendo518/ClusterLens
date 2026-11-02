@@ -141,28 +141,75 @@ def disks():
     return result
 
 
+def _nvidia_gpu_indices(output):
+    """Read NVML indices explicitly; device minors and XML order are not indices."""
+    indices, seen = {}, set()
+    for row in csv.reader(io.StringIO(output), strict=True):
+        if len(row) != 2 or len(indices) >= 128:
+            raise ValueError("无效的 NVIDIA-SMI index/UUID 映射")
+        index, identifier = (field.strip() for field in row)
+        if (
+            not re.fullmatch(r"[0-9]{1,4}", index)
+            or int(index) > 1023
+            or not re.fullmatch(r"GPU-[A-Za-z0-9-]+", identifier)
+            or len(identifier) > 128
+            or identifier in indices
+            or int(index) in seen
+        ):
+            raise ValueError("无效的 NVIDIA-SMI index/UUID 映射")
+        indices[identifier] = int(index)
+        seen.add(int(index))
+    return indices
+
+
 def gpu_data():
     if not shutil.which("nvidia-smi"):
         return [], []
-    try:
+    deadline = time.monotonic() + 8
+
+    def query(arguments):
+        remaining = deadline - time.monotonic()
+        if remaining <= 0:
+            raise subprocess.TimeoutExpired(arguments, 8)
         # capture_output / text were added in Python 3.7; some nodes still run 3.6.
-        result = subprocess.run(
-            ["nvidia-smi", "-q", "-x"],
+        return subprocess.run(
+            arguments,
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,
             universal_newlines=True,
             encoding="utf-8",
             errors="replace",
-            timeout=8,
+            timeout=remaining,
             check=False,
         )
+
+    try:
+        result = query(
+            ["nvidia-smi", "--query-gpu=index,uuid", "--format=csv,noheader,nounits"]
+        )
+        if result.returncode:
+            return [], ["GPU 编号读取失败：" + result.stderr.strip()[:240]]
+        indices = _nvidia_gpu_indices(result.stdout)
+        result = query(["nvidia-smi", "-q", "-x"])
         if result.returncode:
             return [], ["nvidia-smi 采集失败：" + result.stderr.strip()[:240]]
         root = ET.fromstring(result.stdout)
-    except (OSError, subprocess.TimeoutExpired, ET.ParseError) as exc:
+        devices = root.findall("gpu")
+        identifiers = [gpu.findtext("uuid") for gpu in devices]
+        if len(identifiers) != len(set(identifiers)) or set(identifiers) != set(
+            indices
+        ):
+            raise ValueError("NVIDIA-SMI GPU UUID 集合不一致，无法确定编号")
+    except (
+        OSError,
+        ValueError,
+        csv.Error,
+        subprocess.TimeoutExpired,
+        ET.ParseError,
+    ) as exc:
         return [], ["GPU 信息读取失败：" + str(exc)[:240]]
     gpus = []
-    for index, gpu in enumerate(root.findall("gpu")):
+    for gpu in devices:
 
         def value(path, gpu=gpu):
             return number(gpu.findtext(path))
@@ -196,11 +243,7 @@ def gpu_data():
             )
         gpus.append(
             {
-                "index": int(
-                    value("minor_number")
-                    if value("minor_number") is not None
-                    else index
-                ),
+                "index": indices[gpu.findtext("uuid")],
                 "uuid": gpu.findtext("uuid"),
                 "name": gpu.findtext("product_name", "NVIDIA GPU"),
                 "driver": root.findtext("driver_version"),
@@ -217,7 +260,7 @@ def gpu_data():
                 "processes": processes,
             }
         )
-    return gpus, []
+    return sorted(gpus, key=lambda gpu: gpu["index"]), []
 
 
 GPU_CONFIG_ERROR = "GPU 采集配置无效"
